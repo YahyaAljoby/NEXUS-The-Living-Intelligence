@@ -1,0 +1,6 @@
+{
+  "name": "NEXUS: The Living Intelligence",
+  "description": "Next-generation 3D simulation game where you observe, seed, and influence an evolving digital civilization of autonomous intelligent entities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
