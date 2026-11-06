@@ -9,6 +9,23 @@ export class PRNG {
     this.state = seed >>> 0;
   }
 
+  getState(): number {
+    return this.state >>> 0;
+  }
+
+  setState(state: number): void {
+    this.state = state >>> 0;
+  }
+
+  randomId(prefix: string, length = 6): string {
+    const chars = '0123456789abcdefghijklmnopqrstuvwxyz';
+    let res = '';
+    for (let i = 0; i < length; i++) {
+      res += chars[Math.floor(this.next() * chars.length)];
+    }
+    return `${prefix}_${res}`;
+  }
+
   // Returns float in [0, 1)
   next(): number {
     this.state = (this.state + 0x6d2b79f5) | 0;

@@ -1,4 +1,5 @@
 import { FactionId, StructureNode } from '../types/simulation';
+import { PRNG, defaultPrng } from './prng';
 
 export function createStructure(
   type: StructureNode['type'],
@@ -6,7 +7,8 @@ export function createStructure(
   z: number,
   factionId: FactionId,
   builderId: string,
-  epoch: number
+  epoch: number,
+  prng?: PRNG
 ): StructureNode {
   const names: Record<StructureNode['type'], string> = {
     energy_relay: 'Energy Relay Tower',
@@ -24,8 +26,11 @@ export function createStructure(
     quantum_gateway: 3000,
   };
 
+  const generator = prng || defaultPrng;
+  const id = generator.randomId(`struct_${epoch}`);
+
   return {
-    id: `struct_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    id,
     type,
     name: names[type],
     x,

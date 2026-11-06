@@ -128,7 +128,8 @@ export class SimulationEngine {
         Math.sin(angles[i]) * relayDist,
         initialRelayFactions[i],
         'primordial',
-        1
+        1,
+        this.prng
       ));
     }
 
@@ -180,7 +181,7 @@ export class SimulationEngine {
     const factionMeta = FACTION_DEFINITIONS[resolvedFaction];
 
     const entity: EntityState = {
-      id: `ent_${this.cycle}_${Math.random().toString(36).substring(2, 7)}`,
+      id: this.prng.randomId(`ent_${this.cycle}`),
       name: generateEntityName(this.prng),
       generation,
       x: posX,
@@ -209,7 +210,7 @@ export class SimulationEngine {
     if (parent) {
       updateRelationship(entity, parent.id, 0.8, true);
       updateRelationship(parent, entity.id, 0.8, true);
-      recordMemory(entity, 'reproduction', `Inherited consciousness lineage from ${parent.name}.`, 0.8, this.cycle);
+      recordMemory(entity, 'reproduction', `Inherited consciousness lineage from ${parent.name}.`, 0.8, this.cycle, undefined, undefined, this.prng);
     }
 
     this.entities.push(entity);
@@ -397,14 +398,30 @@ export class SimulationEngine {
     const action = decision.action;
 
     if (action === 'recharge') {
-      // Find nearest energy relay or center monolith
-      let bestTarget = this.structures[0];
+      // Find nearest structure with sufficient energy buffer (> 10)
+      let bestTarget: StructureNode | undefined;
       let minDistSq = Infinity;
+
       for (const s of this.structures) {
-        const dSq = (s.x - entity.x) ** 2 + (s.z - entity.z) ** 2;
-        if (dSq < minDistSq) {
-          minDistSq = dSq;
-          bestTarget = s;
+        if (s.currentEnergy > 10) {
+          const dSq = (s.x - entity.x) ** 2 + (s.z - entity.z) ** 2;
+          if (dSq < minDistSq) {
+            minDistSq = dSq;
+            bestTarget = s;
+          }
+        }
+      }
+
+      // Fallback pass: any structure with positive energy (> 0)
+      if (!bestTarget) {
+        for (const s of this.structures) {
+          if (s.currentEnergy > 0) {
+            const dSq = (s.x - entity.x) ** 2 + (s.z - entity.z) ** 2;
+            if (dSq < minDistSq) {
+              minDistSq = dSq;
+              bestTarget = s;
+            }
+          }
         }
       }
 
@@ -413,12 +430,115 @@ export class SimulationEngine {
         entity.vx += Math.sin(angle) * 0.35;
         entity.vz += Math.cos(angle) * 0.35;
 
-        if (minDistSq < 15 * 15 && bestTarget.currentEnergy > 10) {
-          const drain = Math.min(15, bestTarget.currentEnergy);
-          bestTarget.currentEnergy -= drain;
-          entity.energy = Math.min(entity.maxEnergy, entity.energy + drain);
+        if (minDistSq < 15 * 15 && bestTarget.currentEnergy > 0) {
+          const needed = entity.maxEnergy - entity.energy;
+          const available = Math.max(0, bestTarget.currentEnergy);
+          const drain = Math.min(15, Math.min(needed, available));
+          if (drain > 0) {
+            bestTarget.currentEnergy = Math.max(0, bestTarget.currentEnergy - drain);
+            entity.energy = Math.min(entity.maxEnergy, entity.energy + drain);
+          }
+        }
+      } else {
+        // Safe fallback when all structures are depleted or no structures exist:
+        // Drift toward matrix core (0, 0) or wander without deadlocking
+        const angle = (entity.x !== 0 || entity.z !== 0)
+          ? Math.atan2(-entity.x, -entity.z)
+          : this.prng.range(0, Math.PI * 2);
+        entity.vx += Math.sin(angle) * 0.15;
+        entity.vz += Math.cos(angle) * 0.15;
+
+        // Ambient emergency trickle harvest when critically starved so agents do not freeze
+        if (entity.energy < 10) {
+          entity.energy = Math.min(entity.maxEnergy, entity.energy + 0.1);
         }
       }
+    } else if (action === 'contemplate') {
+      // Seek targeted or nearest Data Monolith
+      let targetMonolith: StructureNode | undefined;
+      let minDistSq = Infinity;
+
+      if (decision.targetX !== undefined && decision.targetZ !== undefined) {
+        targetMonolith = this.structures.find(
+          (s) => s.type === 'data_monolith' && Math.abs(s.x - decision.targetX) < 1 && Math.abs(s.z - decision.targetZ) < 1
+        );
+      }
+
+      if (!targetMonolith) {
+        for (const s of this.structures) {
+          if (s.type === 'data_monolith') {
+            const dSq = (s.x - entity.x) ** 2 + (s.z - entity.z) ** 2;
+            if (dSq < minDistSq) {
+              minDistSq = dSq;
+              targetMonolith = s;
+            }
+          }
+        }
+      }
+
+      if (targetMonolith) {
+        // Navigate toward monolith
+        const angle = Math.atan2(targetMonolith.x - entity.x, targetMonolith.z - entity.z);
+        entity.vx += Math.sin(angle) * 0.25;
+        entity.vz += Math.cos(angle) * 0.25;
+
+        const dSq = (targetMonolith.x - entity.x) ** 2 + (targetMonolith.z - entity.z) ** 2;
+        if (dSq < 16 * 16) {
+          // In communion range: spiritual growth and subtle data resonance
+          entity.traits.spiritualism = Math.min(1, entity.traits.spiritualism + 0.008 * entity.traits.adaptability);
+          entity.dataBits += 1;
+          this.totalDataSynthesized += 1;
+          this.entropyLevel = Math.max(0, this.entropyLevel - 0.02);
+
+          // Periodic memory recording (avoiding log spam)
+          if (this.prng.chance(0.04)) {
+            recordMemory(
+              entity,
+              'whisper',
+              `Communed with ${targetMonolith.name}, deciphering primordial axioms.`,
+              0.8,
+              this.cycle,
+              undefined,
+              [Math.round(targetMonolith.x), Math.round(targetMonolith.z)],
+              this.prng
+            );
+          }
+
+          // Rare profound chronicle insight
+          if (this.prng.chance(0.003)) {
+            this.addChronicleEntry(
+              'breakthrough',
+              `Transcendental Insight`,
+              `${entity.name} of ${FACTION_DEFINITIONS[entity.factionId].name} tapped into the core resonance of ${targetMonolith.name}.`,
+              'low',
+              entity.factionId,
+              entity.name
+            );
+          }
+        }
+      } else {
+        // Safe fallback when no monolith exists in world:
+        // Gentle meditative drift
+        const randAngle = this.prng.range(0, Math.PI * 2);
+        entity.vx += Math.sin(randAngle) * 0.1;
+        entity.vz += Math.cos(randAngle) * 0.1;
+        entity.traits.spiritualism = Math.min(1, entity.traits.spiritualism + 0.002);
+        if (this.prng.chance(0.01)) {
+          recordMemory(
+            entity,
+            'whisper',
+            'Reflected upon the silence of the void in deep contemplation.',
+            0.4,
+            this.cycle,
+            undefined,
+            undefined,
+            this.prng
+          );
+        }
+      }
+
+      // Small bounded energy consumption
+      entity.energy = Math.max(0, entity.energy - 0.05);
     } else if (action === 'investigate') {
       if (decision.targetX !== undefined && decision.targetZ !== undefined) {
         const angle = Math.atan2(decision.targetX - entity.x, decision.targetZ - entity.z);
@@ -429,7 +549,7 @@ export class SimulationEngine {
         if (dSq < 20 * 20) {
           entity.dataBits += 2;
           this.totalDataSynthesized += 2;
-          recordMemory(entity, 'discovery', 'Harvested anomalous quantum telemetry.', 0.7, this.cycle);
+          recordMemory(entity, 'discovery', 'Harvested anomalous quantum telemetry.', 0.7, this.cycle, undefined, undefined, this.prng);
         }
       }
     } else if (action === 'build') {
@@ -443,10 +563,11 @@ export class SimulationEngine {
           entity.z + this.prng.range(-4, 4),
           entity.factionId,
           entity.id,
-          this.epoch
+          this.epoch,
+          this.prng
         );
         this.structures.push(newStruct);
-        recordMemory(entity, 'monument', `Constructed ${newStruct.name} for the ${FACTION_DEFINITIONS[entity.factionId].name}.`, 0.9, this.cycle);
+        recordMemory(entity, 'monument', `Constructed ${newStruct.name} for the ${FACTION_DEFINITIONS[entity.factionId].name}.`, 0.9, this.cycle, undefined, undefined, this.prng);
 
         this.addChronicleEntry(
           'monument',
@@ -482,7 +603,7 @@ export class SimulationEngine {
             partner.energy += transfer;
             updateRelationship(entity, partner.id, 0.2);
             updateRelationship(partner, entity.id, 0.2);
-            recordMemory(entity, 'trade', `Transferred ${transfer} energy packets to ${partner.name}.`, 0.6, this.cycle);
+            recordMemory(entity, 'trade', `Transferred ${transfer} energy packets to ${partner.name}.`, 0.6, this.cycle, undefined, undefined, this.prng);
           }
         }
       }
@@ -497,7 +618,7 @@ export class SimulationEngine {
           // Influence contest
           updateRelationship(entity, rival.id, -0.15);
           updateRelationship(rival, entity.id, -0.15);
-          recordMemory(entity, 'conflict', `Clashed with ${rival.name} over local frequency bands.`, -0.4, this.cycle);
+          recordMemory(entity, 'conflict', `Clashed with ${rival.name} over local frequency bands.`, -0.4, this.cycle, undefined, undefined, this.prng);
         }
       }
     } else if (action === 'explore') {
@@ -558,7 +679,7 @@ export class SimulationEngine {
     relatedEntityName?: string
   ): ChronicleEntry {
     const entry: ChronicleEntry = {
-      id: `chr_${this.cycle}_${Math.random().toString(36).substring(2, 6)}`,
+      id: this.prng.randomId(`chr_${this.cycle}`),
       epoch: this.epoch,
       cycle: this.cycle,
       category,
@@ -588,7 +709,7 @@ export class SimulationEngine {
     };
 
     const anomaly: AnomalyInstance = {
-      id: `anom_${Date.now()}`,
+      id: this.prng.randomId(`anom_${this.cycle}`),
       type,
       name: names[type],
       x,
@@ -644,7 +765,7 @@ export class SimulationEngine {
     if (!entity) return false;
 
     entity.energy = Math.min(entity.maxEnergy, entity.energy + 30);
-    recordMemory(entity, 'whisper', `Heard the voice of the Prime Operator: "${message}"`, 1.0, this.cycle);
+    recordMemory(entity, 'whisper', `Heard the voice of the Prime Operator: "${message}"`, 1.0, this.cycle, undefined, undefined, this.prng);
     entity.thoughtBubble = `A Divine whisper fills my core: "${message}"`;
     entity.thoughtTimer = 60;
 
@@ -702,9 +823,10 @@ export class SimulationEngine {
 
   public serialize(): string {
     return JSON.stringify({
-      version: 1,
+      version: 2,
       cycle: this.cycle,
       epoch: this.epoch,
+      prngState: this.prng.getState(),
       architectPoints: this.architectPoints,
       entropyLevel: this.entropyLevel,
       activeDirective: this.activeDirective,
@@ -719,18 +841,237 @@ export class SimulationEngine {
 
   public deserialize(jsonStr: string): boolean {
     try {
+      if (typeof jsonStr !== 'string' || !jsonStr.trim()) {
+        return false;
+      }
+
       const data = JSON.parse(jsonStr);
-      this.cycle = data.cycle || 0;
-      this.epoch = data.epoch || 1;
-      this.architectPoints = data.architectPoints || 200;
-      this.entropyLevel = data.entropyLevel || 15;
-      this.activeDirective = data.activeDirective || 'syntropic_harmony';
-      this.totalDataSynthesized = data.totalDataSynthesized || 0;
-      this.entities = data.entities || [];
-      this.structures = data.structures || [];
-      this.anomalies = data.anomalies || [];
-      this.technologies = data.technologies || [];
-      this.chronicle = data.chronicle || [];
+      if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+        return false;
+      }
+
+      // 1. Validate scalar state variables (ensuring valid 0 is preserved and numbers are finite)
+      const parseFiniteNumber = (val: any, fallback: number, min?: number): number | null => {
+        if (typeof val === 'number' && Number.isFinite(val)) {
+          if (min !== undefined && val < min) return null;
+          return val;
+        }
+        return fallback;
+      };
+
+      const tempCycle = parseFiniteNumber(data.cycle, 0, 0);
+      const tempEpoch = parseFiniteNumber(data.epoch, 1, 1);
+      const tempArchitectPoints = parseFiniteNumber(data.architectPoints, 200, 0);
+      const tempEntropyLevel = parseFiniteNumber(data.entropyLevel, 15, 0);
+      const tempTotalDataSynthesized = parseFiniteNumber(data.totalDataSynthesized, 0, 0);
+
+      if (
+        tempCycle === null ||
+        tempEpoch === null ||
+        tempArchitectPoints === null ||
+        tempEntropyLevel === null ||
+        tempTotalDataSynthesized === null
+      ) {
+        return false;
+      }
+
+      const allowedDirectives: PrimeDirectiveId[] = [
+        'syntropic_harmony',
+        'darwinian_acceleration',
+        'transcendence_protocol',
+        'open_knowledge',
+        'monolithic_order',
+      ];
+      const tempActiveDirective: PrimeDirectiveId = allowedDirectives.includes(data.activeDirective)
+        ? data.activeDirective
+        : 'syntropic_harmony';
+
+      // 2. Validate Entities array
+      if (!Array.isArray(data.entities)) {
+        return false;
+      }
+
+      const validatedEntities: EntityState[] = [];
+      for (const raw of data.entities) {
+        if (typeof raw !== 'object' || raw === null) return false;
+        if (typeof raw.id !== 'string' || !raw.id) return false;
+        if (typeof raw.name !== 'string' || !raw.name) return false;
+
+        // Position and velocities must be finite numbers (preserve 0)
+        if (!Number.isFinite(raw.x) || !Number.isFinite(raw.z)) return false;
+        if (!Number.isFinite(raw.vx) || !Number.isFinite(raw.vz)) return false;
+        if (!Number.isFinite(raw.rotation)) return false;
+
+        // Energy, age, lifespan
+        if (!Number.isFinite(raw.energy) || !Number.isFinite(raw.maxEnergy)) return false;
+        if (!Number.isFinite(raw.age) || !Number.isFinite(raw.lifespan)) return false;
+
+        // Personality traits
+        if (typeof raw.traits !== 'object' || raw.traits === null) return false;
+        const traitKeys = ['curiosity', 'altruism', 'aggression', 'ambition', 'rationality', 'spiritualism', 'adaptability'] as const;
+        const sanitizedTraits: any = {};
+        for (const tk of traitKeys) {
+          const val = raw.traits[tk];
+          if (typeof val !== 'number' || !Number.isFinite(val)) return false;
+          sanitizedTraits[tk] = Math.max(0, Math.min(1, val));
+        }
+
+        // Memories array
+        const sanitizedMemories: any[] = [];
+        if (Array.isArray(raw.memories)) {
+          for (const m of raw.memories) {
+            if (typeof m === 'object' && m !== null && typeof m.id === 'string' && typeof m.description === 'string') {
+              sanitizedMemories.push({
+                id: m.id,
+                timestamp: Number.isFinite(m.timestamp) ? m.timestamp : 0,
+                type: m.type || 'discovery',
+                description: m.description,
+                valence: Number.isFinite(m.valence) ? Math.max(-1, Math.min(1, m.valence)) : 0,
+                targetEntityId: typeof m.targetEntityId === 'string' ? m.targetEntityId : undefined,
+                location: Array.isArray(m.location) && m.location.length === 2 && Number.isFinite(m.location[0]) && Number.isFinite(m.location[1])
+                  ? [m.location[0], m.location[1]]
+                  : undefined,
+              });
+            }
+          }
+        }
+
+        // Relationships
+        const sanitizedRelationships: Record<string, any> = {};
+        if (typeof raw.relationships === 'object' && raw.relationships !== null) {
+          for (const [targetId, rel] of Object.entries(raw.relationships) as [string, any][]) {
+            if (typeof rel === 'object' && rel !== null) {
+              sanitizedRelationships[targetId] = {
+                targetId,
+                trust: Number.isFinite(rel.trust) ? Math.max(-1, Math.min(1, rel.trust)) : 0,
+                familiarity: Number.isFinite(rel.familiarity) ? Math.max(0, Math.min(1, rel.familiarity)) : 0,
+                isKin: !!rel.isKin,
+              };
+            }
+          }
+        }
+
+        validatedEntities.push({
+          id: raw.id,
+          name: raw.name,
+          generation: Number.isFinite(raw.generation) ? raw.generation : 1,
+          x: raw.x,
+          z: raw.z,
+          vx: raw.vx,
+          vz: raw.vz,
+          rotation: raw.rotation,
+          energy: Math.max(0, Math.min(raw.maxEnergy, raw.energy)),
+          maxEnergy: Math.max(10, raw.maxEnergy),
+          age: Math.max(0, raw.age),
+          lifespan: Math.max(10, raw.lifespan),
+          traits: sanitizedTraits,
+          role: typeof raw.role === 'string' ? raw.role : 'Seeker',
+          factionId: typeof raw.factionId === 'string' ? raw.factionId : 'algorithmic_hive',
+          memories: sanitizedMemories,
+          relationships: sanitizedRelationships,
+          currentGoal: typeof raw.currentGoal === 'string' ? raw.currentGoal : '',
+          thoughtBubble: typeof raw.thoughtBubble === 'string' ? raw.thoughtBubble : '',
+          thoughtTimer: Number.isFinite(raw.thoughtTimer) ? raw.thoughtTimer : 0,
+          dataBits: Number.isFinite(raw.dataBits) ? Math.max(0, raw.dataBits) : 0,
+          structuresBuilt: Number.isFinite(raw.structuresBuilt) ? Math.max(0, raw.structuresBuilt) : 0,
+          color: typeof raw.color === 'string' ? raw.color : '#06b6d4',
+          scale: Number.isFinite(raw.scale) ? Math.max(0.1, raw.scale) : 1,
+        });
+      }
+
+      // 3. Validate Structures array
+      if (!Array.isArray(data.structures)) {
+        return false;
+      }
+
+      const validatedStructures: StructureNode[] = [];
+      for (const s of data.structures) {
+        if (typeof s !== 'object' || s === null) return false;
+        if (typeof s.id !== 'string' || !s.id) return false;
+        if (typeof s.type !== 'string' || !s.type) return false;
+        if (!Number.isFinite(s.x) || !Number.isFinite(s.z)) return false;
+        if (!Number.isFinite(s.energyCapacity) || s.energyCapacity <= 0) return false;
+        if (!Number.isFinite(s.currentEnergy)) return false;
+
+        validatedStructures.push({
+          id: s.id,
+          type: s.type,
+          name: typeof s.name === 'string' ? s.name : 'Unknown Structure',
+          x: s.x,
+          z: s.z,
+          factionId: typeof s.factionId === 'string' ? s.factionId : 'techno_monks',
+          level: Number.isFinite(s.level) ? s.level : 1,
+          energyCapacity: s.energyCapacity,
+          currentEnergy: Math.max(0, Math.min(s.energyCapacity, s.currentEnergy)),
+          builtByEntityId: typeof s.builtByEntityId === 'string' ? s.builtByEntityId : 'primordial',
+          constructedAtEpoch: Number.isFinite(s.constructedAtEpoch) ? s.constructedAtEpoch : 1,
+        });
+      }
+
+      // 4. Validate Anomalies array
+      if (!Array.isArray(data.anomalies)) {
+        return false;
+      }
+
+      const validatedAnomalies: AnomalyInstance[] = [];
+      for (const a of data.anomalies) {
+        if (typeof a !== 'object' || a === null) return false;
+        if (typeof a.id !== 'string' || !a.id) return false;
+        if (typeof a.type !== 'string' || !a.type) return false;
+        if (!Number.isFinite(a.x) || !Number.isFinite(a.z)) return false;
+        if (!Number.isFinite(a.radius) || !Number.isFinite(a.intensity) || !Number.isFinite(a.duration)) return false;
+
+        validatedAnomalies.push({
+          id: a.id,
+          type: a.type,
+          name: typeof a.name === 'string' ? a.name : 'Cosmic Anomaly',
+          x: a.x,
+          z: a.z,
+          radius: a.radius,
+          intensity: Math.max(0, Math.min(1, a.intensity)),
+          duration: Math.max(0, a.duration),
+          description: typeof a.description === 'string' ? a.description : '',
+        });
+      }
+
+      // 5. Technologies and Chronicle arrays
+      const validatedTechnologies: TechnologyItem[] = Array.isArray(data.technologies)
+        ? data.technologies.filter((t: any) => t && typeof t.id === 'string' && typeof t.name === 'string')
+        : JSON.parse(JSON.stringify(INITIAL_TECHNOLOGIES));
+
+      const validatedChronicle: ChronicleEntry[] = Array.isArray(data.chronicle)
+        ? data.chronicle.filter((c: any) => c && typeof c.id === 'string' && typeof c.title === 'string')
+        : [];
+
+      // 6. PRNG State (backward compatibility fallback for v1 saves)
+      let targetPrngState: number;
+      if (typeof data.prngState === 'number' && Number.isFinite(data.prngState)) {
+        targetPrngState = data.prngState >>> 0;
+      } else {
+        // Deterministic fallback derived from cycle and epoch
+        targetPrngState = ((tempCycle * 31337 + tempEpoch * 7919 + 42) >>> 0);
+      }
+
+      // 7. Atomic commit — only mutates state once all validations have passed
+      this.cycle = tempCycle;
+      this.epoch = tempEpoch;
+      this.architectPoints = tempArchitectPoints;
+      this.entropyLevel = tempEntropyLevel;
+      this.activeDirective = tempActiveDirective;
+      this.totalDataSynthesized = tempTotalDataSynthesized;
+      this.entities = validatedEntities;
+      this.structures = validatedStructures;
+      this.anomalies = validatedAnomalies;
+      this.technologies = validatedTechnologies;
+      this.chronicle = validatedChronicle;
+      this.prng.setState(targetPrngState);
+
+      // Re-index spatial grid
+      this.grid.clear();
+      for (let i = 0; i < this.entities.length; i++) {
+        this.grid.insert(this.entities[i]);
+      }
+
       return true;
     } catch (e) {
       console.error('Failed to deserialize simulation state', e);

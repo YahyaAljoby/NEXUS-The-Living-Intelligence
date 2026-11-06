@@ -1,4 +1,5 @@
 import { EntityState, MemoryRecord, EntityRelationship } from '../types/simulation';
+import { PRNG, defaultPrng } from './prng';
 
 const MAX_MEMORIES_PER_ENTITY = 12;
 
@@ -9,10 +10,12 @@ export function recordMemory(
   valence: number,
   timestamp: number,
   targetEntityId?: string,
-  location?: [number, number]
+  location?: [number, number],
+  prng?: PRNG
 ): void {
+  const generator = prng || defaultPrng;
   const record: MemoryRecord = {
-    id: `mem_${timestamp}_${Math.random().toString(36).substring(2, 7)}`,
+    id: generator.randomId(`mem_${timestamp}`),
     timestamp,
     type,
     description,

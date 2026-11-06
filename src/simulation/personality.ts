@@ -151,6 +151,11 @@ export function evaluateUtility(
   // 7. Contemplation / Transcendence
   let contemplateUtility = traits.spiritualism * 1.5;
   if (activeDirective === 'transcendence_protocol') contemplateUtility *= 1.7;
+  if (entity.role === 'Philosopher' || entity.role === 'Prophet') contemplateUtility *= 1.3;
+  const nearbyMonolith = nearbyStructures.find((s) => s.type === 'data_monolith');
+  if (nearbyMonolith) {
+    contemplateUtility += 0.35;
+  }
 
   // 8. Exploration
   const exploreUtility = traits.curiosity * 0.8 + traits.adaptability * 0.6;
@@ -175,7 +180,11 @@ export function evaluateUtility(
     {
       action: 'contemplate',
       utility: contemplateUtility,
-      thought: 'Meditating upon the Architect’s unseen protocols.',
+      targetX: nearbyMonolith ? nearbyMonolith.x : undefined,
+      targetZ: nearbyMonolith ? nearbyMonolith.z : undefined,
+      thought: nearbyMonolith
+        ? 'Communing with the Crystalline Data Monolith.'
+        : 'Meditating upon the Architect’s unseen protocols.',
     },
   ];
 
